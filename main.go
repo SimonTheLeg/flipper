@@ -1,13 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/user"
 
-	"github.com/HouzuoGuo/tiedot/db"
+	db "github.com/HouzuoGuo/tiedot/db"
 )
 
 // Resources
@@ -25,10 +26,6 @@ import (
 // remove list
 // List an item in a List
 
-type myDB struct {
-	db.DB
-}
-
 func main() {
 	flag.Parse()
 
@@ -45,14 +42,15 @@ func main() {
 
 	// open Database, create if not exists
 	myDBDir := usr.HomeDir + "/.flipper"
-	os.RemoveAll(myDBDir)
-	defer os.RemoveAll(myDBDir)
+	// myDBDir := "/.flipper"
 
 	// (Create if not exist) open a database
-	myDB, err := db.OpenDB(myDBDir)
+	dbSess, err := db.OpenDB(myDBDir)
 	if err != nil {
+		fmt.Println("error opening the database")
 		panic(err)
 	}
+	fmt.Println("database created or opened")
 
 	// Trigger Action
 	switch len(flag.Args()) {
@@ -60,76 +58,122 @@ func main() {
 		fmt.Println("Usage: flipper listname [itemname] [itemvalue]")
 		os.Exit(1)
 	case 1:
-		if listExists(listName) == true {
-			fmt.Println("list ", listName, "exists")
-			showAllItemsForList(listName)
+		if err := dbSess.Scrub(listName); err != nil {
+			fmt.Println("list", listName, "exists")
+			os.Exit(0)
 		} else {
-			fmt.Println("list ", listName, "does not exists")
-			createList(listName)
+			fmt.Println("list", listName, "does not exists")
+			if err := dbSess.Create(listName); err != nil {
+				panic(err)
+			}
+			fmt.Println("list", listName, "created")
+			os.Exit(0)
 		}
 	case 2:
-		copyItemToClipboard(listName, itemName)
+		fmt.Println("case 2")
+		if err := dbSess.Use(listName); err != nil {
+			fmt.Println("list", listName, "exists")
+			// Read document
+			list := dbSess.Use(listName)
+			fmt.Println("using list", listName)
+
+			var query interface{}
+			json.Unmarshal([]byte(`[{"eq": %itemName, "in": ["Title"]}]`), &query)
+
+			queryResult := make(map[int]struct{}) // query result (document IDs) goes into map keys
+
+			if err := db.EvalQuery(query, list, &queryResult); err != nil {
+				panic(err)
+			}
+
+			for id := range queryResult {
+				// To get query result document, simply read it
+				readBack, err := list.Read(id)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Printf("Query returned document %v\n", readBack)
+				fmt.Println("copy", itemName, "from", listName, "into clipboard")
+			}
+
+			os.Exit(0)
+		} else {
+			fmt.Println("list", listName, "does not exists")
+			if err := dbSess.Create(listName); err != nil {
+				panic(err)
+			}
+			os.Exit(0)
+		}
+
 	case 3:
-		addItemToList(listName, itemName, itemValue)
+		fmt.Println("case 3")
+		if err := dbSess.Use(listName); err != nil {
+			fmt.Println("list", listName, "exists")
+
+			list := dbSess.Use(listName)
+			fmt.Println("using list", listName)
+
+			var query interface{}
+			json.Unmarshal([]byte(`[{"eq": %itemName, "in": ["Title"]}]`), &query)
+
+			queryResult := make(map[int]struct{}) // query result (document IDs) goes into map keys
+
+			if err := db.EvalQuery(query, list, &queryResult); err != nil {
+				panic(err)
+			}
+			fmt.Println("store queried for item")
+
+			var itemExists bool
+
+			for id := range queryResult {
+				// To get query result document, simply read it
+				readBack, err := list.Read(id)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Printf("Query returned document %v\n", readBack)
+				itemExists = true
+				fmt.Println("copy", itemName, "from", listName, "into clipboard")
+			}
+
+			fmt.Println(itemExists)
+
+			if itemExists != true {
+
+				fmt.Println("trying to insert data")
+				docID, err := list.Insert(map[string]interface{}{
+					"item":  itemName,
+					"value": itemValue})
+				if err != nil {
+					panic(err)
+				}
+				fmt.Println("add item", itemName, "with value", itemValue, "into list", listName)
+
+				// Read document
+				readBack, err := list.Read(docID)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Println("read item", itemName, "from list", listName)
+
+				if err := list.Index([]string{"item"}); err != nil {
+					panic(err)
+				}
+				fmt.Println("created index on item", itemName)
+
+				fmt.Println(readBack)
+			}
+			os.Exit(0)
+		} else {
+			fmt.Println("list", listName, "does not exists")
+			if err := dbSess.Create(listName); err != nil {
+				panic(err)
+			}
+			fmt.Println("list", listName, "created")
+			os.Exit(0)
+		}
+		fmt.Println("add value", itemValue, "of item", itemName, "into list", listName)
 
 	}
-
-}
-
-func copyItemToClipboard(listName string, itemName string) {
-
-}
-
-// func (db *badger.DB) writeToDB() {
-
-// }
-
-func readFromDB(listName string) {
-	/*
-		err := db.View(func(txn *badger.Txn) error {
-			// Your code here…
-			return nil
-		})
-	*/
-}
-
-func (myDB *myDB) listExists(listName string) bool {
-	// Scrub (repair and compact) "Feeds"
-	if err := myDB.Scrub(listName); err != nil {
-		return false
-	}
-	return true
-}
-
-// flipper <list>
-func (myDB *myDB) createList(listName string) {
-	if err := myDB.Create(listName); err != nil {
-		panic(err)
-	}
-}
-
-// flipper <list> <name> <value>
-func (myDB *myDB) addItemToList(listName string, itemName string, itemValue string) {
-	feeds := myDB.Use(listName)
-}
-
-// flipper <list> remove <name> OR
-// flipper remote <list> <name> OR
-// flipper <list> <name> remove
-func removeItemFromList() {
-
-}
-
-func (myDB *myDB) deleteList(listName string) {
-	if err := myDB.Drop(listName); err != nil {
-		panic(err)
-	}
-}
-
-func deleteItem() {
-
-}
-
-func showAllItemsForList(listName string) {
 
 }
