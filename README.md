@@ -9,12 +9,12 @@ snippet command line tool
 - currently autooverwrite of values
 
 ## TODO
-[ ] filepath for non windows systems  
-[ ] multiline values  
-[ ] copy to clib  
-[ ] prompt for overwriting value  
-[/] get lists  
-[ ] do not break if file does not exist
+- [ ] filepath for non windows systems  
+- [ ] multiline values  
+- [ ] copy to clib  
+- [ ] prompt for overwriting value  
+- [x] get lists  
+- [ ] do not break if file does not exist
 
 
 ## example file
