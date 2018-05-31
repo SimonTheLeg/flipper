@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/user"
+	"strings"
 
 	color "github.com/fatih/color"
 	ini "gopkg.in/ini.v1"
@@ -28,9 +29,23 @@ import (
 // remove list
 // List an item in a List
 
-var myFolder = "\\.flipper"
-var fileName = "flipper.ini"
-var flipperSplash = "Flipper!"
+var (
+	myFolder      = "\\.flipper"
+	fileName      = "flipper.ini"
+	flipperSplash = "Flipper!"
+)
+
+var deleteFlag = flag.String("d", "**ListName**", "help message for delete flag")
+
+// settings
+type Setting struct {
+	name  string
+	value string
+}
+
+var ListOfSettings = [2]Setting{
+	{name: "setting.prompt", value: "false"},
+	{name: "setting.sort", value: "false"}}
 
 var filePath, listName, itemName, itemValue string
 
@@ -71,6 +86,73 @@ func main() {
 		os.Exit(0)
 	} else {
 		// fmt.Println("file loaded") // debug
+	}
+
+	readAndWriteSettings(cfg)
+
+	// processing flags
+	// -d
+	/*
+			* for the moment flag -d is always processed, even when not present in the command
+			* therefore we check in the first else statement if one of the args contains the delete Flag
+		  *
+			* multiple deleteFlags are overwriting each other
+			* "-d test3 -d test2" will result in test2
+	*/
+	if *deleteFlag != "**ListName**" {
+		fmt.Println("delete flag found", *deleteFlag) // debug
+		if flag.NArg() == 0 {
+			fmt.Println("number of arguments is 0. deleteFlag:", *deleteFlag) // debug
+			_, err := cfg.GetSection(*deleteFlag)
+			if err == nil {
+				deleteList(cfg, *deleteFlag)
+				os.Exit(0)
+			} else {
+
+				lists := cfg.SectionStrings()
+				for _, nameOfList := range lists {
+					sec, _ := cfg.GetSection(nameOfList)
+					items := sec.KeyStrings()
+					if len(items) > 0 {
+						// fmt.Fprintln(color.Output, "items in List", cList(listName)) // debug
+						for _, item := range items {
+							if item == *deleteFlag {
+								cfg.Section(nameOfList).DeleteKey(*deleteFlag)
+								fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(*deleteFlag), "from", cList(nameOfList))
+								os.Exit(0)
+							}
+						}
+					}
+				}
+
+				fmt.Fprintln(color.Output, flipperSplash, "List", cList(*deleteFlag), "does not exist")
+				os.Exit(0)
+			}
+		} else if flag.NArg() == 1 {
+			// the first argument of the command has been taken as the value of the delete Flag
+			// therefore the number of arguments is reduced by one
+			deleteItem(cfg, listName, *deleteFlag)
+			// fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(listName), "from List", cList(*deleteFlag), "/ TODO: implement")
+			os.Exit(0)
+		}
+		// }
+
+	} else {
+		//
+		for _, argument := range flag.Args() {
+			if strings.Contains(argument, "-d") {
+				if flag.NArg() == 2 {
+					deleteList(cfg, listName)
+					os.Exit(0)
+				} else if flag.NArg() == 3 {
+					deleteItem(cfg, listName, itemName)
+					// fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(listName), "from List", cList(itemName), "/ TODO: implement")
+					os.Exit(0)
+				}
+
+			}
+		}
+
 	}
 
 	// Trigger Action
@@ -133,6 +215,7 @@ func main() {
 		os.Exit(0)
 
 	case 2:
+
 		_, err := cfg.GetSection(listName)
 		if err == nil {
 			// fmt.Fprintln(color.Output, "list", cList(listName), "exists") // debug
@@ -147,6 +230,7 @@ func main() {
 		} else {
 			fmt.Fprintln(color.Output, flipperSplash, cList(listName), "does not exist. Cannot copy", cItem(itemName), "to clipboard")
 		}
+
 		os.Exit(0)
 
 	case 3:
@@ -161,6 +245,62 @@ func main() {
 		}
 		os.Exit(0)
 
+	default:
+		fmt.Fprintln(color.Output, "Usage: flipper", cList("listname"), cItem("[itemname]"), cValue("[itemvalue]"))
+
+	}
+}
+
+func readAndWriteSettings(cfg *ini.File) {
+
+	fileChanged := false
+
+	sec, _ := cfg.GetSection("")
+	settingsFromFile := sec.KeyStrings()
+
+	if len(settingsFromFile) > 0 {
+		// fmt.Fprintln(color.Output, "items in List", cList(listName)) // debug
+
+		for i, setting := range ListOfSettings {
+			foundInArray := false
+
+			for _, item := range settingsFromFile {
+				if item == setting.name {
+					ListOfSettings[i].value = cfg.Section("").Key(setting.name).Value()
+					// fmt.Fprintln(color.Output, flipperSplash, "found & read setting", setting.name) // debug
+					foundInArray = true
+					break
+				}
+			}
+
+			if !foundInArray {
+				_, err := cfg.Section("").NewKey(setting.name, setting.value)
+				// fmt.Fprintln(color.Output, flipperSplash, setting.name, "not found. writing to file") // debug
+				if err != nil {
+					fmt.Fprintln(color.Output, flipperSplash, "could not write", setting.name, err)
+				} else {
+					fileChanged = true
+				}
+			}
+
+		}
+
+	} else {
+		fmt.Println("settings empty, writing new") // debug
+		for _, setting := range ListOfSettings {
+			fmt.Println(setting.name, "=", setting.value)
+			_, err := cfg.Section("").NewKey(setting.name, setting.value)
+			if err != nil {
+				fmt.Fprintln(color.Output, flipperSplash, "could not write", setting.name, err)
+			} else {
+				fileChanged = true
+			}
+
+		}
+	}
+
+	if fileChanged {
+		writeFile(cfg)
 	}
 
 }
@@ -186,29 +326,74 @@ func createItemOrOverwrite(cfg *ini.File) {
 func addItemToList(cfg *ini.File) {
 	_, err := cfg.Section(listName).NewKey(itemName, itemValue)
 	if err == nil {
-		fmt.Fprintln(color.Output, flipperSplash, "added", cValue(itemValue), "as", cItem(itemName), "to", cList(listName))
+		fmt.Fprintln(color.Output, flipperSplash, "added", cItem(itemName), "with value", cValue(itemValue), "to List", cList(listName))
 	}
 
 	writeFile(cfg)
 }
 
-// func addItem(cfg *ini.File) {
-// 	_, err := cfg.Section("").NewKey(listName, itemName)
-// 	if err == nil {
-// 		fmt.Fprintln(color.Output, flipperSplash, "added item", cItem(listName), "with value", cValue(itemName))
-// 	}
-// 	writeFile(cfg)
-// }
+func overwriteValue(cfg *ini.File, key *ini.Key) {
+	key.SetValue(itemValue)
+	fmt.Fprintln(color.Output, flipperSplash, cItem(itemName), "overwritten with value", cValue(itemValue), "in List", cList(listName))
+	cfg.SaveTo(filePath)
+}
+
+func deleteList(cfg *ini.File, list string) {
+
+	lists := cfg.SectionStrings()
+	for _, nameOfList := range lists {
+		if nameOfList == list {
+
+			for _, setting := range ListOfSettings {
+				if setting.name == "setting.prompt" {
+					if setting.value == "true" {
+						fmt.Println("do you really want to delete", list+"?")
+					}
+				}
+			}
+
+			cfg.DeleteSection(list)
+			fmt.Fprintln(color.Output, flipperSplash, "List", cList(list), "deleted")
+			writeFile(cfg)
+		} else {
+			fmt.Fprintln(color.Output, flipperSplash, "List", cList(list), "does not exist")
+			os.Exit(0)
+		}
+	}
+}
+
+func deleteItem(cfg *ini.File, list string, item string) {
+
+	lists := cfg.SectionStrings()
+	for _, nameOfList := range lists {
+		if nameOfList == list {
+
+			keyExists := cfg.Section(list).HasKey(item)
+			if keyExists == true {
+
+				for _, setting := range ListOfSettings {
+					if setting.name == "setting.prompt" {
+						if setting.value == "true" {
+							fmt.Println("do you really want to delete", list+"?")
+						}
+					}
+				}
+
+				cfg.Section(list).DeleteKey(item)
+				fmt.Fprintln(color.Output, flipperSplash, "delted", cItem(item), "from List", cList(list))
+				writeFile(cfg)
+			} else {
+				fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "not found in List", cList(list))
+				os.Exit(0)
+			}
+		}
+
+	}
+}
 
 func writeFile(cfg *ini.File) {
 	err := cfg.SaveTo(filePath)
 	if err != nil {
 		fmt.Println("cannot write file")
 	}
-}
-
-func overwriteValue(cfg *ini.File, key *ini.Key) {
-	key.SetValue(itemValue)
-	fmt.Fprintln(color.Output, flipperSplash, cItem(itemName), "overwritten with", cValue(itemValue), "in", cList(listName))
-	cfg.SaveTo(filePath)
 }

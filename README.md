@@ -6,7 +6,10 @@ snippet command line tool
 - add list
 - add item with value
 - list all items of a list
-- currently autooverwrite of values
+- delete item
+- delete list
+- currently auto-overwrite of values
+
 
 ## TODO
 - [ ] filepath for non windows systems  
