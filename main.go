@@ -1,12 +1,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/user"
-	"strings"
+	"strconv"
 
 	color "github.com/fatih/color"
 	ini "gopkg.in/ini.v1"
@@ -35,7 +36,7 @@ var (
 	flipperSplash = "Flipper!"
 )
 
-var deleteFlag = flag.String("d", "**ListName**", "help message for delete flag")
+// var deleteFlag = flag.String("d", "**ListName**", "help message for delete flag")
 
 // settings
 type Setting struct {
@@ -49,7 +50,23 @@ var ListOfSettings = [2]Setting{
 
 var filePath, listName, itemName, itemValue string
 
+var arrayOfFlags = [8]string{"d", "delete", "l", "list", "s", "search", "a", "all"}
+
+type Flag struct {
+	name string
+	pos  int
+}
+
+type Item struct {
+	list  string
+	item  string
+	value string
+}
+
+var foundFlag Flag
+
 // terminal colors
+var cFlag = color.New(color.FgMagenta).SprintFunc()
 var cList = color.New(color.FgYellow).SprintFunc()
 var cItem = color.New(color.FgGreen).SprintFunc()
 var cValue = color.New(color.FgBlue).SprintFunc()
@@ -64,11 +81,7 @@ func setHomeDir() {
 }
 
 func main() {
-	flag.Parse()
-
-	listName = flag.Arg(0)
-	itemName = flag.Arg(1)
-	itemValue = flag.Arg(2)
+	flag.Parse() // because of this flag.Arg() will be 1 instead of 0 if an argument is provided
 
 	setHomeDir()
 
@@ -89,70 +102,11 @@ func main() {
 	}
 
 	readAndWriteSettings(cfg)
+	checkForFlags()
+	readArguments()
 
-	// processing flags
-	// -d
-	/*
-			* for the moment flag -d is always processed, even when not present in the command
-			* therefore we check in the first else statement if one of the args contains the delete Flag
-		  *
-			* multiple deleteFlags are overwriting each other
-			* "-d test3 -d test2" will result in test2
-	*/
-	if *deleteFlag != "**ListName**" {
-		fmt.Println("delete flag found", *deleteFlag) // debug
-		if flag.NArg() == 0 {
-			fmt.Println("number of arguments is 0. deleteFlag:", *deleteFlag) // debug
-			_, err := cfg.GetSection(*deleteFlag)
-			if err == nil {
-				deleteList(cfg, *deleteFlag)
-				os.Exit(0)
-			} else {
-
-				lists := cfg.SectionStrings()
-				for _, nameOfList := range lists {
-					sec, _ := cfg.GetSection(nameOfList)
-					items := sec.KeyStrings()
-					if len(items) > 0 {
-						// fmt.Fprintln(color.Output, "items in List", cList(listName)) // debug
-						for _, item := range items {
-							if item == *deleteFlag {
-								cfg.Section(nameOfList).DeleteKey(*deleteFlag)
-								fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(*deleteFlag), "from", cList(nameOfList))
-								os.Exit(0)
-							}
-						}
-					}
-				}
-
-				fmt.Fprintln(color.Output, flipperSplash, "List", cList(*deleteFlag), "does not exist")
-				os.Exit(0)
-			}
-		} else if flag.NArg() == 1 {
-			// the first argument of the command has been taken as the value of the delete Flag
-			// therefore the number of arguments is reduced by one
-			deleteItem(cfg, listName, *deleteFlag)
-			// fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(listName), "from List", cList(*deleteFlag), "/ TODO: implement")
-			os.Exit(0)
-		}
-		// }
-
-	} else {
-		//
-		for _, argument := range flag.Args() {
-			if strings.Contains(argument, "-d") {
-				if flag.NArg() == 2 {
-					deleteList(cfg, listName)
-					os.Exit(0)
-				} else if flag.NArg() == 3 {
-					deleteItem(cfg, listName, itemName)
-					// fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(listName), "from List", cList(itemName), "/ TODO: implement")
-					os.Exit(0)
-				}
-
-			}
-		}
-
+	if foundFlag.name != "" {
+		processFlags(cfg)
 	}
 
 	// Trigger Action
@@ -173,8 +127,7 @@ func main() {
 			}
 
 		} else {
-
-			fmt.Fprintln(color.Output, "Usage: flipper", cList("listname"), cItem("[itemname]"), cValue("[itemvalue]"))
+			showCommandStructure()
 		}
 
 		os.Exit(0)
@@ -183,34 +136,21 @@ func main() {
 
 		sec, err := cfg.GetSection(listName)
 		if err == nil {
-			// fmt.Fprintln(color.Output, "list", cList(listName), "exists") // debug
+			fmt.Fprintln(color.Output, "list", cList(listName), "exists") // debug
 			items := sec.KeysHash()
 			if len(items) > 0 {
 				// fmt.Fprintln(color.Output, "items in List", cList(listName)) // debug
 				for item, value := range items {
 					fmt.Fprintln(color.Output, cItem(item), "=", cValue(value))
 				}
-			} else {
-				// look in every list for item
-				lists := cfg.SectionStrings()
-				for _, nameOfList := range lists {
-					sec, _ := cfg.GetSection(nameOfList)
-					items := sec.KeysHash()
-					if len(items) > 0 {
-						// fmt.Fprintln(color.Output, "items in List", cList(listName)) // debug
-						for item, value := range items {
-							if item == listName {
-								fmt.Fprintln(color.Output, flipperSplash, "value", cValue(value), "of item", cItem(item), "copyied to clipboard")
-								os.Exit(0)
-							}
-						}
-					}
-				}
-
-				fmt.Fprintln(color.Output, flipperSplash, "list", cList(listName), "is empty")
 			}
 		} else {
-			createList(cfg, 1)
+			result, err := lookForItem(cfg, itemName)
+			if err == nil {
+				copyToClipboard(cfg, result.item)
+			} else {
+				createList(cfg, listName)
+			}
 		}
 		os.Exit(0)
 
@@ -222,8 +162,7 @@ func main() {
 			_, err := cfg.Section(listName).GetKey(itemName)
 			if err == nil {
 				// fmt.Fprintln(color.Output, "item", cItem(itemName), "exists in List", cList(listName)) // debug
-				val := cfg.Section(listName).Key(itemName).Value()
-				fmt.Fprintln(color.Output, flipperSplash, "copied", cValue(val), "from", cItem(itemName), "to clipboard [TODO: implement that]")
+				copyToClipboard(cfg, itemName)
 			} else {
 				fmt.Fprintln(color.Output, flipperSplash, cItem(itemName), "does not exist in", cList(listName))
 			}
@@ -240,18 +179,54 @@ func main() {
 			// fmt.Fprintln(color.Output, "list", cList(listName), "exists") // debug
 			createItemOrOverwrite(cfg)
 		} else {
-			createList(cfg, 3)
+			createList(cfg, listName)
 			createItemOrOverwrite(cfg)
 		}
 		os.Exit(0)
 
 	default:
-		fmt.Fprintln(color.Output, "Usage: flipper", cList("listname"), cItem("[itemname]"), cValue("[itemvalue]"))
+		showCommandStructure()
 
 	}
 }
 
+func showCommandStructure() {
+	fmt.Fprintln(color.Output, "Usage: flipper", cFlag("[flag(s)]"), cList("listname"), cItem("[itemname]"), cValue("[itemvalue]"))
+}
+
+func copyToClipboard(cfg *ini.File, item string) {
+	// look in every list for item
+	result, err := lookForItem(cfg, item)
+	if err == nil {
+		// fmt.Fprintln(color.Output, flipperSplash, "value", cValue(value), "of item", cItem(item), "copyied to clipboard")
+		fmt.Fprintln(color.Output, flipperSplash, "copied", cValue(result.value), "from", cItem(result.item), "to clipboard [TODO: implement that]")
+	} else {
+		fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "not found")
+	}
+}
+
+func lookForItem(cfg *ini.File, searchedItem string) (Item, error) {
+	lists := cfg.SectionStrings()
+	for _, nameOfList := range lists {
+		sec, _ := cfg.GetSection(nameOfList)
+		items := sec.KeysHash()
+		if len(items) > 0 {
+			// fmt.Fprintln(color.Output, "items in List", cList(searchedItem)) // debug
+			for item, value := range items {
+				if item == searchedItem {
+					// fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "found") // debug
+					return Item{nameOfList, item, value}, nil
+					// break
+				}
+			}
+		}
+	}
+	err := errors.New("Not found")
+	return Item{"", "", ""}, err
+}
+
 func readAndWriteSettings(cfg *ini.File) {
+	// fmt.Println("running readAndWriteSettings") // debug
 
 	fileChanged := false
 
@@ -305,11 +280,81 @@ func readAndWriteSettings(cfg *ini.File) {
 
 }
 
-func createList(cfg *ini.File, step int) {
-	cfg.NewSection(listName)
-	if step == 1 {
-		fmt.Fprintln(color.Output, flipperSplash, "list", cList(listName), "created")
+func checkForFlags() {
+	// fmt.Println("running checkForFlags") // debug
+	for i, item := range flag.Args() {
+		if i == 0 || i == len(flag.Args())-1 {
+			for _, flag := range arrayOfFlags {
+				if item == flag {
+					fmt.Println("Flag", item, "found")
+					foundFlag = Flag{name: item, pos: i}
+				}
+			}
+		}
 	}
+}
+
+func readArguments() {
+	fmt.Println("running readArguments(" + strconv.Itoa(len(flag.Args())) + ")") // debug
+	if foundFlag.name != "" {
+		listName = flag.Arg(1)
+		itemName = flag.Arg(2)
+		itemValue = flag.Arg(3)
+	} else {
+		listName = flag.Arg(0)
+		itemName = flag.Arg(1)
+		itemValue = flag.Arg(2)
+	}
+}
+
+func processFlags(cfg *ini.File) {
+	fmt.Println("running processFlags") // debug
+	fmt.Println(foundFlag.name)
+	if foundFlag.name == "d" || foundFlag.name == "delete" {
+		processDeleteFlag(cfg)
+	}
+}
+
+func processDeleteFlag(cfg *ini.File) {
+	fmt.Println("running processDeleteFlag")
+	// got one argument beside the flag, delete list (or item if list does not exist)
+	if len(flag.Args()) == 2 {
+
+		_, err := cfg.GetSection(listName)
+		if err == nil {
+			if deleteList(cfg) == nil {
+				os.Exit(0)
+			} else {
+				var list = ""
+				var item = listName
+				deleteItem(cfg, list, item)
+				os.Exit(0)
+			}
+		} else {
+			// since the list was not found, check if we can delete an item with that name
+			var item = listName
+			result, err := lookForItem(cfg, item)
+			if err == nil {
+				deleteItem(cfg, result.list, result.item)
+				// cfg.Section(result.list).DeleteKey(result.item)
+				// fmt.Fprintln(color.Output, flipperSplash, "deleted", cItem(result.item), "from", cList(result.list))
+				os.Exit(0)
+			} else {
+				fmt.Fprintln(color.Output, flipperSplash, "List", cList(listName), "does not exist")
+				os.Exit(0)
+			}
+
+		}
+
+		// got two arguments beside the flag, delete item
+	} else if len(flag.Args()) == 3 {
+
+	}
+}
+
+func createList(cfg *ini.File, list string) {
+	cfg.NewSection(list)
+	fmt.Fprintln(color.Output, flipperSplash, "list", cList(list), "created")
 	cfg.SaveTo(filePath)
 }
 
@@ -338,57 +383,69 @@ func overwriteValue(cfg *ini.File, key *ini.Key) {
 	cfg.SaveTo(filePath)
 }
 
-func deleteList(cfg *ini.File, list string) {
+func deleteList(cfg *ini.File) error {
+	fmt.Println("running deleteList") // debug
 
+	listExists := false
 	lists := cfg.SectionStrings()
 	for _, nameOfList := range lists {
-		if nameOfList == list {
+		fmt.Println("list", listName, "array list", nameOfList)
+		if nameOfList == listName {
 
-			for _, setting := range ListOfSettings {
-				if setting.name == "setting.prompt" {
-					if setting.value == "true" {
-						fmt.Println("do you really want to delete", list+"?")
-					}
-				}
-			}
-
-			cfg.DeleteSection(list)
-			fmt.Fprintln(color.Output, flipperSplash, "List", cList(list), "deleted")
+			listExists = true
+			promptUser(listName)
+			cfg.DeleteSection(listName)
+			fmt.Fprintln(color.Output, flipperSplash, "List", cList(listName), "deleted")
 			writeFile(cfg)
-		} else {
-			fmt.Fprintln(color.Output, flipperSplash, "List", cList(list), "does not exist")
-			os.Exit(0)
+		}
+	}
+	if !listExists {
+		fmt.Fprintln(color.Output, flipperSplash, "List", cList(listName), "does not exist")
+		return fmt.Errorf("List %q not found", listName)
+	}
+	return nil
+}
+
+func promptUser(item string) {
+	for _, setting := range ListOfSettings {
+		if setting.name == "setting.prompt" {
+			if setting.value == "true" {
+				fmt.Println("do you really want to delete", item+"?")
+			}
 		}
 	}
 }
 
 func deleteItem(cfg *ini.File, list string, item string) {
+	fmt.Println("running deleteItem") // debug
+	keyExists := false
 
-	lists := cfg.SectionStrings()
-	for _, nameOfList := range lists {
-		if nameOfList == list {
-
-			keyExists := cfg.Section(list).HasKey(item)
-			if keyExists == true {
-
-				for _, setting := range ListOfSettings {
-					if setting.name == "setting.prompt" {
-						if setting.value == "true" {
-							fmt.Println("do you really want to delete", list+"?")
-						}
-					}
-				}
-
-				cfg.Section(list).DeleteKey(item)
-				fmt.Fprintln(color.Output, flipperSplash, "delted", cItem(item), "from List", cList(list))
-				writeFile(cfg)
-			} else {
-				fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "not found in List", cList(list))
-				os.Exit(0)
+	if list != "" {
+		keyExists = cfg.Section(list).HasKey(item)
+	} else {
+		lists := cfg.SectionStrings()
+		for _, nameOfList := range lists {
+			keyExists := cfg.Section(nameOfList).HasKey(item)
+			if keyExists {
+				list = nameOfList
+				break
 			}
 		}
-
 	}
+
+	if keyExists {
+		promptUser(item)
+		cfg.Section(list).DeleteKey(item)
+		fmt.Fprintln(color.Output, flipperSplash, "delted", cItem(item), "from List", cList(list))
+		writeFile(cfg)
+	} else {
+		if list != "" {
+			fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "not found in List", cList(list))
+		} else {
+			fmt.Fprintln(color.Output, flipperSplash, "item", cItem(item), "not found in any List")
+		}
+	}
+
 }
 
 func writeFile(cfg *ini.File) {
